@@ -1,0 +1,66 @@
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import express from 'express';
+import helmet from 'helmet';
+import { ZodError } from 'zod';
+import { env } from './config/env';
+import { AppError } from './lib/errors';
+import { adminRouter } from './routes/admin';
+import { authRouter } from './routes/auth';
+import { categoriesRouter } from './routes/categories';
+import { healthRouter } from './routes/health';
+import { manageRouter } from './routes/manage';
+import { productsRouter } from './routes/products';
+
+export function createApp() {
+  const app = express();
+
+  // Behind Cloud Run / a load balancer, req.ip must come from X-Forwarded-For (rate limiting).
+  if (env.NODE_ENV === 'production') app.set('trust proxy', 1);
+
+  app.use(helmet());
+  app.use(cors({ origin: env.corsOrigins, credentials: true }));
+  app.use(express.json({ limit: '1mb' }));
+  app.use(cookieParser());
+
+  app.use('/api/health', healthRouter);
+  app.use('/api/auth', authRouter);
+  app.use('/api/admin', adminRouter);
+  app.use('/api/categories', categoriesRouter); // public
+  app.use('/api/products', productsRouter); // public
+  app.use('/api/manage', manageRouter); // SHOPKEEPER + ADMIN
+  // Step 7 → /api/cart, /api/orders
+
+  app.use((_req, res) =>
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }),
+  );
+
+  app.use(
+    (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      if (err instanceof ZodError) {
+        res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid input',
+            details: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+          },
+        });
+        return;
+      }
+      if (err instanceof AppError) {
+        res.status(err.status).json({
+          error: { code: err.code, message: err.message, details: err.details },
+        });
+        return;
+      }
+      if ((err as { type?: string })?.type === 'entity.parse.failed') {
+        res.status(400).json({ error: { code: 'BAD_JSON', message: 'Malformed JSON body' } });
+        return;
+      }
+      console.error(err);
+      res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
+    },
+  );
+
+  return app;
+}

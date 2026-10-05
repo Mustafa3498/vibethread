@@ -1,0 +1,453 @@
+// VibeThread — Prisma schema (PostgreSQL)
+// Money = Decimal(10,2). All PKs are UUIDs (safe to expose in URLs / sockets).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── ENUMS ─────────────────────────
+
+enum Role {
+  CUSTOMER
+  SHOPKEEPER
+  ADMIN
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED // soft-delete / retired seasonal lines
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PACKING
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum CartStatus {
+  ACTIVE
+  CONVERTED // became an order
+  ABANDONED // used for abandonment analytics
+}
+
+enum StockMovementType {
+  RESTOCK
+  SALE
+  RETURN
+  ADJUSTMENT
+  RESERVE   // item sits in a cart / pending checkout
+  RELEASE
+}
+
+enum EventType {
+  PAGE_VIEW
+  PRODUCT_VIEW
+  IMAGE_HOVER      // dwell on a photo (durationMs)
+  IMAGE_ZOOM
+  COLOR_SELECT     // e.g. Black vs Olive
+  COLOR_HOVER
+  SIZE_SELECT
+  SIZE_CHART_OPEN
+  SIZE_TOGGLE      // rapid toggling → hesitation signal
+  ADD_TO_CART_HOVER
+  ADD_TO_CART
+  REMOVE_FROM_CART
+  CHECKOUT_START
+  CHECKOUT_COMPLETE
+  SEARCH
+  FILTER_APPLY
+  SESSION_END
+}
+
+enum ReservationStatus {
+  ACTIVE
+  COMMITTED // converted into a sale
+  RELEASED // cancelled / cart emptied
+  EXPIRED // hold timed out
+}
+
+enum AlertType {
+  LOW_STOCK
+  FAST_MOVING
+  OUT_OF_STOCK
+}
+
+// ───────────────────────── USERS & AUTH ─────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  phone        String?
+  role         Role     @default(CUSTOMER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  addresses     Address[]
+  refreshTokens RefreshToken[]
+  styleProfile  StyleProfile?
+  fitProfile    FitProfile?
+  carts         Cart[]
+  orders        Order[]
+  sessions      Session[]
+  stockMoves    StockMovement[] // staff who made the change
+
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Address {
+  id         String  @id @default(uuid())
+  userId     String
+  label      String? // Home, Office
+  line1      String
+  line2      String?
+  city       String
+  state      String?
+  postalCode String?
+  country    String  @default("PK")
+  isDefault  Boolean @default(false)
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@index([userId])
+}
+
+// Personalization: "unique user style vectors"
+model StyleProfile {
+  userId          String   @id
+  styleVector     Json     @default("{}") // {streetwear:0.8, minimal:0.3, ...} — upgrade to pgvector later
+  favoriteColors  String[]
+  preferredFit    String? // slim / regular / oversized
+  lastComputedAt  DateTime @default(now())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Size & Fit Predictor inputs
+model FitProfile {
+  userId     String   @id
+  heightCm   Int?
+  weightKg   Int?
+  chestCm    Int?
+  waistCm    Int?
+  hipCm      Int?
+  usualSize  String?
+  fitPref    String?
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────── CATALOG ─────────────────────────
+
+model Category {
+  id        String     @id @default(uuid())
+  name      String
+  slug      String     @unique
+  parentId  String?
+  sortOrder Int        @default(0)
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  products  Product[]
+
+  @@index([parentId])
+}
+
+model Product {
+  id           String        @id @default(uuid())
+  categoryId   String
+  name         String
+  slug         String        @unique
+  description  String
+  fabric       String? // fabric specifications
+  careNotes    String?
+  basePrice    Decimal       @db.Decimal(10, 2)
+  costPrice    Decimal?      @db.Decimal(10, 2) // for profit-margin analytics (admin only)
+  promoTag     String? // "NEW", "20% OFF"
+  salePrice    Decimal?      @db.Decimal(10, 2)
+  tags         String[] // trend / weather / style matching
+  weatherTags  String[] // "hot", "rainy", "cold" → weather-synced filtering
+  trendScore   Float         @default(0) // updated by analytics worker
+  status       ProductStatus @default(DRAFT)
+  archivedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  category   Category          @relation(fields: [categoryId], references: [id])
+  images     ProductImage[]
+  variants   ProductVariant[]
+  dailyStats ProductDailyStats[]
+  events     TrackingEvent[]
+
+  @@index([categoryId, status])
+  @@index([status, trendScore])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  color     String? // image belongs to a color option (nullable = generic)
+  url       String
+  altText   String?
+  sortOrder Int      @default(0)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, color])
+}
+
+// One row per color × size combination — this is the sellable unit
+model ProductVariant {
+  id            String   @id @default(uuid())
+  productId     String
+  sku           String   @unique
+  color         String
+  colorHex      String?
+  size          String // XS, S, M, L, XL...
+  priceOverride Decimal? @db.Decimal(10, 2)
+  isActive      Boolean  @default(true)
+
+  product    Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventory  Inventory?
+  movements  StockMovement[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+  alerts       InventoryAlert[]
+  reservations StockReservation[]
+
+  @@unique([productId, color, size])
+  @@index([productId])
+}
+
+model Inventory {
+  variantId         String   @id
+  quantity          Int      @default(0) // physical stock
+  reserved          Int      @default(0) // held in carts/checkouts
+  lowStockThreshold Int      @default(5)
+  updatedAt         DateTime @updatedAt
+  variant           ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  // available = quantity - reserved → drives "Only 2 left in Medium"
+  @@index([quantity])
+}
+
+// Immutable ledger — powers Inventory Velocity Alerts
+model StockMovement {
+  id        String            @id @default(uuid())
+  variantId String
+  type      StockMovementType
+  delta     Int
+  reason    String?
+  actorId   String? // shopkeeper/admin, null for system
+  createdAt DateTime          @default(now())
+  variant   ProductVariant    @relation(fields: [variantId], references: [id])
+  actor     User?             @relation(fields: [actorId], references: [id])
+
+  @@index([variantId, createdAt])
+  @@index([type, createdAt])
+}
+
+// A temporary hold on stock (checkout in progress). Expires automatically.
+// Ledger convention: for RESERVE/RELEASE movements `delta` = change in `reserved`;
+// for RESTOCK/SALE/RETURN/ADJUSTMENT it is the change in `quantity`.
+model StockReservation {
+  id        String            @id @default(uuid())
+  variantId String
+  cartId    String?
+  orderId   String?
+  quantity  Int
+  status    ReservationStatus @default(ACTIVE)
+  expiresAt DateTime
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  variant   ProductVariant    @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+  @@index([variantId])
+  @@index([cartId])
+  @@index([orderId])
+}
+
+model InventoryAlert {
+  id         String    @id @default(uuid())
+  variantId  String
+  type       AlertType
+  message    String
+  isRead     Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  variant    ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([isRead, createdAt])
+}
+
+// ───────────────────────── CART ─────────────────────────
+
+model Cart {
+  id         String     @id @default(uuid())
+  userId     String? // null = guest cart (merged on login)
+  sessionId  String? // guest identifier
+  status     CartStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt // abandonment = ACTIVE + stale updatedAt
+
+  user  User?      @relation(fields: [userId], references: [id])
+  items CartItem[]
+  order Order?
+
+  @@index([userId, status])
+  @@index([status, updatedAt])
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  variantId String
+  quantity  Int      @default(1)
+  addedAt   DateTime @default(now())
+  cart      Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@unique([cartId, variantId])
+}
+
+// ───────────────────────── ORDERS ─────────────────────────
+
+model Order {
+  id              String        @id @default(uuid())
+  orderNumber     String        @unique // human-friendly, e.g. VT-100245
+  userId          String
+  cartId          String?       @unique
+  addressId       String
+  status          OrderStatus   @default(PENDING_PAYMENT)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  paymentMethod   String? // COD, card, JazzCash...
+  subtotal        Decimal       @db.Decimal(10, 2)
+  shippingFee     Decimal       @default(0) @db.Decimal(10, 2)
+  discount        Decimal       @default(0) @db.Decimal(10, 2)
+  total           Decimal       @db.Decimal(10, 2)
+  estimatedDelivery DateTime? // delivery countdown clock
+  trackingNumber  String?
+  courier         String?
+  labelUrl        String? // printed shipping label
+  placedAt        DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user    User        @relation(fields: [userId], references: [id])
+  cart    Cart?       @relation(fields: [cartId], references: [id])
+  address Address     @relation(fields: [addressId], references: [id])
+  items   OrderItem[]
+
+  @@index([userId])
+  @@index([status, placedAt])
+}
+
+// Snapshot of price/name at purchase time — never join back for history
+model OrderItem {
+  id          String   @id @default(uuid())
+  orderId     String
+  variantId   String
+  productName String
+  sku         String
+  color       String
+  size        String
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  unitCost    Decimal? @db.Decimal(10, 2)
+  quantity    Int
+  order       Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([orderId])
+  @@index([variantId])
+}
+
+// ───────────────────────── REAL-TIME TRACKING ─────────────────────────
+
+model Session {
+  id          String    @id @default(uuid())
+  userId      String? // null until login
+  anonymousId String // cookie/device id
+  deviceType  String?
+  country     String?
+  city        String?
+  referrer    String?
+  startedAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  endedAt     DateTime?
+  converted   Boolean   @default(false)
+  exitPage    String?
+
+  user   User?           @relation(fields: [userId], references: [id])
+  events TrackingEvent[]
+
+  @@index([startedAt])
+  @@index([userId])
+  @@index([anonymousId])
+}
+
+// High-volume table. Converted to a RANGE-partitioned table (by month) via raw SQL —
+// see events_partitioning.sql. Partition key must be part of the PK.
+model TrackingEvent {
+  id         String    @default(uuid())
+  occurredAt DateTime  @default(now())
+  sessionId  String
+  productId  String?
+  type       EventType
+  color      String?
+  size       String?
+  durationMs Int? // hover / dwell time
+  page       String?
+  meta       Json? // flexible payload (cursor target, filters, toggle count)
+
+  session Session  @relation(fields: [sessionId], references: [id])
+  product Product? @relation(fields: [productId], references: [id])
+
+  @@id([id, occurredAt])
+  @@index([sessionId, occurredAt])
+  @@index([productId, type, occurredAt])
+}
+
+// Pre-aggregated by worker → dashboards read this, never the raw events
+model ProductDailyStats {
+  productId     String
+  date          DateTime @db.Date
+  views         Int      @default(0)
+  avgDwellMs    Int      @default(0)
+  cartAdds      Int      @default(0)
+  checkouts     Int      @default(0)
+  purchases     Int      @default(0)
+  hesitationHits Int     @default(0) // size toggling / repeated cart hovers w/o action
+  revenue       Decimal  @default(0) @db.Decimal(12, 2)
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([productId, date])
+  @@index([date])
+}

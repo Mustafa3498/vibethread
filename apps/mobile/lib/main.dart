@@ -1,0 +1,259 @@
+import 'dart:async';
+import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'core/network/dio_client.dart';
+import 'core/services/secure_storage_service.dart';
+import 'core/services/socket_service.dart';
+import 'features/auth/data/datasources/auth_remote_datasource.dart';
+import 'features/auth/data/repositories/auth_repository_impl.dart';
+import 'features/auth/domain/repositories/auth_repository.dart';
+import 'features/auth/presentation/bloc/auth_bloc.dart';
+import 'features/auth/presentation/pages/login_page.dart';
+import 'features/catalog/data/datasources/catalog_remote_datasource.dart';
+import 'features/catalog/data/repositories/catalog_repository_impl.dart';
+import 'features/catalog/domain/repositories/catalog_repository.dart';
+import 'features/catalog/presentation/bloc/catalog_bloc.dart';
+import 'features/catalog/presentation/pages/catalog_page.dart';
+
+/// Backend URLs. Do NOT add `/api` here: datasources already use full paths
+/// such as `/api/auth/login`.
+///
+/// Real phone over USB: run `adb reverse tcp:4000 tcp:4000` and keep the
+/// defaults. Other setups, e.g.:
+///   flutter run --dart-define=API_BASE_URL=http://192.168.1.10:4000
+///               --dart-define=SOCKET_URL=http://192.168.1.10:4000
+const String _apiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://localhost:4000',
+);
+const String _socketUrl = String.fromEnvironment(
+  'SOCKET_URL',
+  defaultValue: 'http://localhost:4000',
+);
+
+Future<void> main() async {
+  // Anything uncaught in this zone is routed to _reportError.
+  await runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+
+    FlutterError.onError = (details) {
+      FlutterError.presentError(details);
+      _reportError(details.exception, details.stack);
+    };
+    PlatformDispatcher.instance.onError = (error, stack) {
+      _reportError(error, stack);
+      return true;
+    };
+
+    await SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+
+    final deps = await AppDependencies.create();
+
+    if (kDebugMode) Bloc.observer = _AppBlocObserver();
+
+    runApp(VibeThreadApp(deps: deps));
+  }, _reportError);
+}
+
+void _reportError(Object error, StackTrace? stack) {
+  // TODO: forward to Crashlytics / Sentry in production.
+  debugPrint('Unhandled error: $error\n$stack');
+}
+
+// -----------------------------------------------------------------------------
+// Composition root
+// -----------------------------------------------------------------------------
+
+/// Builds the object graph once at startup.
+class AppDependencies {
+  AppDependencies._({
+    required this.secureStorage,
+    required this.socketService,
+    required this.authRepository,
+    required this.catalogRepository,
+    required this.sessionExpired,
+  });
+
+  final SecureStorageService secureStorage;
+  final SocketService socketService;
+  final AuthRepository authRepository;
+  final CatalogRepository catalogRepository;
+
+  /// Emits when the refresh token was rejected and the user must sign in again.
+  final Stream<void> sessionExpired;
+
+  static Future<AppDependencies> create() async {
+    final secureStorage = SecureStorageService();
+    final sessionExpired = StreamController<void>.broadcast();
+
+    // Dio + interceptors + CookieJar live inside DioClient.
+    final dioClient = await DioClient.create(
+      baseUrl: _apiBaseUrl,
+      secureStorage: secureStorage,
+      onSessionExpired: () => sessionExpired.add(null),
+    );
+
+    final authRepository = AuthRepositoryImpl(
+      remote: AuthRemoteDataSource(dioClient.dio),
+      storage: secureStorage,
+      cookieJar: dioClient.cookieJar,
+    );
+
+    final catalogRepository = CatalogRepositoryImpl(
+      CatalogRemoteDataSource(dioClient.dio),
+    );
+
+    final socketService = SocketService(
+      secureStorage: secureStorage,
+      serverUrl: _socketUrl,
+    );
+
+    return AppDependencies._(
+      secureStorage: secureStorage,
+      socketService: socketService,
+      authRepository: authRepository,
+      catalogRepository: catalogRepository,
+      sessionExpired: sessionExpired.stream,
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// App
+// -----------------------------------------------------------------------------
+
+class VibeThreadApp extends StatelessWidget {
+  const VibeThreadApp({super.key, required this.deps});
+
+  final AppDependencies deps;
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiRepositoryProvider(
+      providers: [
+        RepositoryProvider<SecureStorageService>.value(
+          value: deps.secureStorage,
+        ),
+        RepositoryProvider<AuthRepository>.value(value: deps.authRepository),
+        RepositoryProvider<CatalogRepository>.value(
+          value: deps.catalogRepository,
+        ),
+        // Lives for the whole app lifetime, so no explicit dispose is needed.
+        RepositoryProvider<SocketService>.value(value: deps.socketService),
+      ],
+      child: MultiBlocProvider(
+        providers: [
+          BlocProvider<AuthBloc>(
+            create: (_) => AuthBloc(authRepository: deps.authRepository)
+              ..add(const AuthCheckRequested()),
+          ),
+          BlocProvider<CatalogBloc>(
+            create: (_) => CatalogBloc(deps.catalogRepository),
+          ),
+        ],
+        child: MaterialApp(
+          title: 'VibeThread',
+          debugShowCheckedModeBanner: false,
+          themeMode: ThemeMode.system,
+          theme: _buildTheme(Brightness.light),
+          darkTheme: _buildTheme(Brightness.dark),
+          home: _AuthGate(sessionExpired: deps.sessionExpired),
+        ),
+      ),
+    );
+  }
+
+  static ThemeData _buildTheme(Brightness brightness) {
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorSchemeSeed: const Color(0xFF6C5CE7),
+    );
+  }
+}
+
+/// Switches between login and the main experience based on [AuthBloc] state
+/// and ties the socket lifecycle to authentication.
+class _AuthGate extends StatefulWidget {
+  const _AuthGate({required this.sessionExpired});
+
+  final Stream<void> sessionExpired;
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  StreamSubscription<void>? _expiredSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _expiredSub = widget.sessionExpired.listen((_) {
+      if (mounted) context.read<AuthBloc>().add(const AuthSessionExpired());
+    });
+  }
+
+  @override
+  void dispose() {
+    _expiredSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final socket = context.read<SocketService>();
+
+    return BlocConsumer<AuthBloc, AuthState>(
+      listener: (context, state) {
+        if (state is AuthAuthenticated) {
+          unawaited(socket.reconnect()); // fresh token after login/refresh
+        } else if (state is AuthUnauthenticated) {
+          socket.disconnect();
+        }
+      },
+      builder: (context, state) {
+        if (state is AuthAuthenticated) return const CatalogScreen();
+        if (state is AuthInitial) return const _SplashScreen();
+        // Unauthenticated, Loading (login in progress) and Failure all keep
+        // the login form on screen so typed text is not lost.
+        return const LoginPage();
+      },
+    );
+  }
+}
+
+class _SplashScreen extends StatelessWidget {
+  const _SplashScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Debug tooling
+// -----------------------------------------------------------------------------
+
+class _AppBlocObserver extends BlocObserver {
+  @override
+  void onTransition(Bloc bloc, Transition transition) {
+    super.onTransition(bloc, transition);
+    debugPrint('[${bloc.runtimeType}] $transition');
+  }
+
+  @override
+  void onError(BlocBase bloc, Object error, StackTrace stackTrace) {
+    debugPrint('[${bloc.runtimeType}] error: $error');
+    super.onError(bloc, error, stackTrace);
+  }
+}

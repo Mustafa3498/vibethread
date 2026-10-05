@@ -1,0 +1,137 @@
+import 'package:bloc_concurrency/bloc_concurrency.dart';
+import 'package:equatable/equatable.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../../domain/entities/catalog_item.dart';
+import '../../domain/repositories/catalog_repository.dart';
+
+part 'catalog_event.dart';
+part 'catalog_state.dart';
+
+class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
+  CatalogBloc(this._repository) : super(const CatalogState()) {
+    on<CatalogStarted>(_onStarted, transformer: droppable());
+    on<CatalogRefreshed>(_onRefreshed, transformer: restartable());
+    on<CatalogLoadMoreRequested>(_onLoadMore, transformer: droppable());
+    on<CatalogSearchChanged>(_onSearchChanged, transformer: restartable());
+  }
+
+  final CatalogRepository _repository;
+
+  static const int _pageSize = 20;
+  static const Duration _searchDebounce = Duration(milliseconds: 350);
+
+  Future<void> _onStarted(
+    CatalogStarted event,
+    Emitter<CatalogState> emit,
+  ) =>
+      _loadFirstPage(emit, showLoader: true);
+
+  Future<void> _onRefreshed(
+    CatalogRefreshed event,
+    Emitter<CatalogState> emit,
+  ) =>
+      _loadFirstPage(emit, showLoader: false);
+
+  Future<void> _onSearchChanged(
+    CatalogSearchChanged event,
+    Emitter<CatalogState> emit,
+  ) async {
+    final query = event.query.trim();
+
+    // Debounce: `restartable()` cancels this handler if a newer keystroke
+    // arrives during the delay, so `emit.isDone` becomes true.
+    await Future<void>.delayed(_searchDebounce);
+    if (emit.isDone || query == state.query) return;
+
+    emit(
+      state.copyWith(
+        query: query,
+        status: CatalogStatus.loading,
+        items: const [],
+        page: 0,
+        hasMore: true,
+        isLoadingMore: false,
+        clearError: true,
+      ),
+    );
+    await _loadFirstPage(emit, showLoader: false);
+  }
+
+  Future<void> _onLoadMore(
+    CatalogLoadMoreRequested event,
+    Emitter<CatalogState> emit,
+  ) async {
+    if (state.status != CatalogStatus.success ||
+        !state.hasMore ||
+        state.isLoadingMore) {
+      return;
+    }
+
+    final query = state.query;
+    final nextPage = state.page + 1;
+    emit(state.copyWith(isLoadingMore: true, clearError: true));
+
+    try {
+      final result = await _repository.getCatalog(
+        page: nextPage,
+        limit: _pageSize,
+        query: query,
+      );
+      // Drop stale results if a refresh/search replaced the list meanwhile.
+      if (emit.isDone || query != state.query || state.page + 1 != nextPage) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          items: [...state.items, ...result.items],
+          page: result.page,
+          hasMore: result.hasMore,
+          isLoadingMore: false,
+        ),
+      );
+    } on CatalogException catch (e) {
+      if (emit.isDone || query != state.query) return;
+      // Keep the list; the UI can show a retry footer / snackbar.
+      emit(state.copyWith(isLoadingMore: false, errorMessage: e.message));
+    }
+  }
+
+  Future<void> _loadFirstPage(
+    Emitter<CatalogState> emit, {
+    required bool showLoader,
+  }) async {
+    final query = state.query;
+    if (showLoader) {
+      emit(state.copyWith(status: CatalogStatus.loading, clearError: true));
+    }
+
+    try {
+      final result = await _repository.getCatalog(
+        page: 1,
+        limit: _pageSize,
+        query: query,
+      );
+      if (emit.isDone || query != state.query) return;
+      emit(
+        state.copyWith(
+          status: CatalogStatus.success,
+          items: result.items,
+          page: result.page,
+          hasMore: result.hasMore,
+          isLoadingMore: false,
+          clearError: true,
+        ),
+      );
+    } on CatalogException catch (e) {
+      if (emit.isDone || query != state.query) return;
+      emit(
+        state.copyWith(
+          status: CatalogStatus.failure,
+          isLoadingMore: false,
+          errorMessage: e.message,
+        ),
+      );
+    }
+  }
+}
