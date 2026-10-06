@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../../core/network/auth_interceptor.dart';
+import '../../domain/entities/catalog_filters.dart';
 import '../models/catalog_item_model.dart';
 
 class CatalogRemoteDataSource {
@@ -8,19 +9,22 @@ class CatalogRemoteDataSource {
 
   final Dio _dio;
 
-  /// Public endpoint: skips the Bearer header and the 401-refresh logic, so
-  /// an expired access token can never break browsing.
+  /// Public endpoint (`GET /api/products`, ACTIVE products only): skips the
+  /// Bearer header and the 401-refresh logic. The backend names the page size
+  /// `pageSize` (max 48).
   Future<CatalogPageModel> fetchCatalog({
     required int page,
     required int limit,
     String? query,
+    CatalogFilters filters = const CatalogFilters(),
   }) async {
     final res = await _dio.get<dynamic>(
-      '/api/catalog',
+      '/api/products',
       queryParameters: {
         'page': page,
-        'limit': limit,
+        'pageSize': limit,
         if (query != null && query.isNotEmpty) 'q': query,
+        ...filters.toQuery(),
       },
       options: Options(extra: {AuthInterceptor.skipAuthKey: true}),
     );

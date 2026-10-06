@@ -19,10 +19,28 @@ class AuthRepositoryImpl implements AuthRepository {
   final SecureStorageService _storage;
   final CookieJar _cookieJar;
 
+  /// True if the device holds a session that still works.
+  ///
+  /// Access tokens live only 15 minutes and public catalog calls never use
+  /// them, so a stored token is often stale. Probing `/api/auth/me` makes the
+  /// interceptor refresh it (so the socket connects with a valid token).
   @override
   Future<bool> hasSession() async {
     final token = await _storage.getAccessToken();
-    return token != null && token.isNotEmpty;
+    if (token == null || token.isEmpty) return false;
+
+    try {
+      await _remote.verifySession();
+      return true;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status == 401 || status == 403) {
+        // Refresh was rejected too: the interceptor already cleared the session.
+        return false;
+      }
+      // Server unreachable / timeout: keep the session and try again later.
+      return true;
+    }
   }
 
   @override

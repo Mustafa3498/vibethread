@@ -10,6 +10,7 @@ final class CatalogState extends Equatable {
     this.hasMore = true,
     this.isLoadingMore = false,
     this.query = '',
+    this.filters = const CatalogFilters(),
     this.errorMessage,
   });
 
@@ -21,9 +22,10 @@ final class CatalogState extends Equatable {
   final bool hasMore;
   final bool isLoadingMore;
   final String query;
+  final CatalogFilters filters;
 
   /// On `failure` with a non-empty [items] list (failed refresh), keep showing
-  /// the list and surface this in a snackbar instead of an error screen.
+  /// the grid and surface this in a snackbar instead of an error screen.
   final String? errorMessage;
 
   bool get isEmpty => status == CatalogStatus.success && items.isEmpty;
@@ -35,6 +37,7 @@ final class CatalogState extends Equatable {
     bool? hasMore,
     bool? isLoadingMore,
     String? query,
+    CatalogFilters? filters,
     String? errorMessage,
     bool clearError = false,
   }) {
@@ -45,11 +48,12 @@ final class CatalogState extends Equatable {
       hasMore: hasMore ?? this.hasMore,
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
       query: query ?? this.query,
+      filters: filters ?? this.filters,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
     );
   }
 
   @override
   List<Object?> get props =>
-      [status, items, page, hasMore, isLoadingMore, query, errorMessage];
+      [status, items, page, hasMore, isLoadingMore, query, filters, errorMessage];
 }

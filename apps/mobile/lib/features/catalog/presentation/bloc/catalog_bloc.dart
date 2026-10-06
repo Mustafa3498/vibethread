@@ -2,6 +2,7 @@ import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../domain/entities/catalog_filters.dart';
 import '../../domain/entities/catalog_item.dart';
 import '../../domain/repositories/catalog_repository.dart';
 
@@ -14,6 +15,7 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
     on<CatalogRefreshed>(_onRefreshed, transformer: restartable());
     on<CatalogLoadMoreRequested>(_onLoadMore, transformer: droppable());
     on<CatalogSearchChanged>(_onSearchChanged, transformer: restartable());
+    on<CatalogFiltersChanged>(_onFiltersChanged, transformer: restartable());
   }
 
   final CatalogRepository _repository;
@@ -58,6 +60,26 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
     await _loadFirstPage(emit, showLoader: false);
   }
 
+  Future<void> _onFiltersChanged(
+    CatalogFiltersChanged event,
+    Emitter<CatalogState> emit,
+  ) async {
+    if (event.filters == state.filters) return;
+
+    emit(
+      state.copyWith(
+        filters: event.filters,
+        status: CatalogStatus.loading,
+        items: const [],
+        page: 0,
+        hasMore: true,
+        isLoadingMore: false,
+        clearError: true,
+      ),
+    );
+    await _loadFirstPage(emit, showLoader: false);
+  }
+
   Future<void> _onLoadMore(
     CatalogLoadMoreRequested event,
     Emitter<CatalogState> emit,
@@ -69,6 +91,7 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
     }
 
     final query = state.query;
+    final filters = state.filters;
     final nextPage = state.page + 1;
     emit(state.copyWith(isLoadingMore: true, clearError: true));
 
@@ -77,9 +100,13 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
         page: nextPage,
         limit: _pageSize,
         query: query,
+        filters: filters,
       );
-      // Drop stale results if a refresh/search replaced the list meanwhile.
-      if (emit.isDone || query != state.query || state.page + 1 != nextPage) {
+      // Drop stale results if a refresh/search/filter replaced the list.
+      if (emit.isDone ||
+          query != state.query ||
+          filters != state.filters ||
+          state.page + 1 != nextPage) {
         return;
       }
       emit(
@@ -91,8 +118,9 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
         ),
       );
     } on CatalogException catch (e) {
-      if (emit.isDone || query != state.query) return;
-      // Keep the list; the UI can show a retry footer / snackbar.
+      if (emit.isDone || query != state.query || filters != state.filters) {
+        return;
+      }
       emit(state.copyWith(isLoadingMore: false, errorMessage: e.message));
     }
   }
@@ -102,6 +130,7 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
     required bool showLoader,
   }) async {
     final query = state.query;
+    final filters = state.filters;
     if (showLoader) {
       emit(state.copyWith(status: CatalogStatus.loading, clearError: true));
     }
@@ -111,8 +140,11 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
         page: 1,
         limit: _pageSize,
         query: query,
+        filters: filters,
       );
-      if (emit.isDone || query != state.query) return;
+      if (emit.isDone || query != state.query || filters != state.filters) {
+        return;
+      }
       emit(
         state.copyWith(
           status: CatalogStatus.success,
@@ -124,7 +156,9 @@ class CatalogBloc extends Bloc<CatalogEvent, CatalogState> {
         ),
       );
     } on CatalogException catch (e) {
-      if (emit.isDone || query != state.query) return;
+      if (emit.isDone || query != state.query || filters != state.filters) {
+        return;
+      }
       emit(
         state.copyWith(
           status: CatalogStatus.failure,

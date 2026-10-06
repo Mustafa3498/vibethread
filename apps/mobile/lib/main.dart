@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +8,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'core/network/dio_client.dart';
 import 'core/services/secure_storage_service.dart';
 import 'core/services/socket_service.dart';
+import 'core/theme/app_theme.dart';
 import 'features/auth/data/datasources/auth_remote_datasource.dart';
 import 'features/auth/data/repositories/auth_repository_impl.dart';
 import 'features/auth/domain/repositories/auth_repository.dart';
@@ -19,6 +19,9 @@ import 'features/catalog/data/repositories/catalog_repository_impl.dart';
 import 'features/catalog/domain/repositories/catalog_repository.dart';
 import 'features/catalog/presentation/bloc/catalog_bloc.dart';
 import 'features/catalog/presentation/pages/catalog_page.dart';
+import 'features/product/data/datasources/product_remote_datasource.dart';
+import 'features/product/data/repositories/product_repository_impl.dart';
+import 'features/product/domain/repositories/product_repository.dart';
 
 /// Backend URLs. Do NOT add `/api` here: datasources already use full paths
 /// such as `/api/auth/login`.
@@ -54,6 +57,7 @@ Future<void> main() async {
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
 
     final deps = await AppDependencies.create();
 
@@ -79,6 +83,7 @@ class AppDependencies {
     required this.socketService,
     required this.authRepository,
     required this.catalogRepository,
+    required this.productRepository,
     required this.sessionExpired,
   });
 
@@ -86,6 +91,7 @@ class AppDependencies {
   final SocketService socketService;
   final AuthRepository authRepository;
   final CatalogRepository catalogRepository;
+  final ProductRepository productRepository;
 
   /// Emits when the refresh token was rejected and the user must sign in again.
   final Stream<void> sessionExpired;
@@ -111,6 +117,10 @@ class AppDependencies {
       CatalogRemoteDataSource(dioClient.dio),
     );
 
+    final productRepository = ProductRepositoryImpl(
+      ProductRemoteDataSource(dioClient.dio),
+    );
+
     final socketService = SocketService(
       secureStorage: secureStorage,
       serverUrl: _socketUrl,
@@ -121,6 +131,7 @@ class AppDependencies {
       socketService: socketService,
       authRepository: authRepository,
       catalogRepository: catalogRepository,
+      productRepository: productRepository,
       sessionExpired: sessionExpired.stream,
     );
   }
@@ -146,6 +157,9 @@ class VibeThreadApp extends StatelessWidget {
         RepositoryProvider<CatalogRepository>.value(
           value: deps.catalogRepository,
         ),
+        RepositoryProvider<ProductRepository>.value(
+          value: deps.productRepository,
+        ),
         // Lives for the whole app lifetime, so no explicit dispose is needed.
         RepositoryProvider<SocketService>.value(value: deps.socketService),
       ],
@@ -162,20 +176,12 @@ class VibeThreadApp extends StatelessWidget {
         child: MaterialApp(
           title: 'VibeThread',
           debugShowCheckedModeBanner: false,
-          themeMode: ThemeMode.system,
-          theme: _buildTheme(Brightness.light),
-          darkTheme: _buildTheme(Brightness.dark),
+          themeMode: ThemeMode.dark,
+          theme: buildAppTheme(),
+          darkTheme: buildAppTheme(),
           home: _AuthGate(sessionExpired: deps.sessionExpired),
         ),
       ),
-    );
-  }
-
-  static ThemeData _buildTheme(Brightness brightness) {
-    return ThemeData(
-      useMaterial3: true,
-      brightness: brightness,
-      colorSchemeSeed: const Color(0xFF6C5CE7),
     );
   }
 }
@@ -248,7 +254,8 @@ class _AppBlocObserver extends BlocObserver {
   @override
   void onTransition(Bloc bloc, Transition transition) {
     super.onTransition(bloc, transition);
-    debugPrint('[${bloc.runtimeType}] $transition');
+    // Event/state class names only: states can contain user data.
+    debugPrint('[${bloc.runtimeType}] ${transition.event.runtimeType}');
   }
 
   @override

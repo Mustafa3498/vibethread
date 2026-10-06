@@ -1,3 +1,4 @@
+import '../entities/catalog_filters.dart';
 import '../entities/catalog_page.dart';
 
 class CatalogException implements Exception {
@@ -15,5 +16,6 @@ abstract interface class CatalogRepository {
     int page = 1,
     int limit = 20,
     String? query,
+    CatalogFilters filters = const CatalogFilters(),
   });
 }

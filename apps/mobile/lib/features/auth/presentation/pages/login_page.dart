@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../../core/theme/app_theme.dart';
 import '../bloc/auth_bloc.dart';
 
 class LoginPage extends StatefulWidget {
@@ -63,22 +64,32 @@ class _LoginPageState extends State<LoginPage> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          'VibeThread',
+                        const Text(
+                          'VIBETHREAD',
                           textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.headlineMedium,
+                          style: TextStyle(
+                            fontSize: 30,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 6,
+                          ),
                         ),
-                        const SizedBox(height: 32),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Wear your vibe.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppColors.textMuted,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 40),
                         TextFormField(
                           controller: _email,
                           enabled: !loading,
                           keyboardType: TextInputType.emailAddress,
                           autofillHints: const [AutofillHints.email],
                           textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            labelText: 'Email',
-                            border: OutlineInputBorder(),
-                          ),
+                          decoration: const InputDecoration(hintText: 'Email'),
                           validator: (v) {
                             final value = v?.trim() ?? '';
                             if (value.isEmpty) return 'Email is required';
@@ -86,7 +97,7 @@ class _LoginPageState extends State<LoginPage> {
                             return null;
                           },
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         TextFormField(
                           controller: _password,
                           enabled: !loading,
@@ -95,8 +106,7 @@ class _LoginPageState extends State<LoginPage> {
                           textInputAction: TextInputAction.done,
                           onFieldSubmitted: (_) => _submit(),
                           decoration: InputDecoration(
-                            labelText: 'Password',
-                            border: const OutlineInputBorder(),
+                            hintText: 'Password',
                             suffixIcon: IconButton(
                               icon: Icon(
                                 _obscure
@@ -122,7 +132,7 @@ class _LoginPageState extends State<LoginPage> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Sign in'),
+                              : const Text('SIGN IN'),
                         ),
                       ],
                     ),

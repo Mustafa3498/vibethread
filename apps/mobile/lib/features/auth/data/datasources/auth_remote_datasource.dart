@@ -36,6 +36,17 @@ class AuthRemoteDataSource {
     );
   }
 
+  /// Authenticated probe (`GET /api/auth/me`). If the stored access token has
+  /// expired the server answers 401, the [AuthInterceptor] refreshes it with
+  /// the HttpOnly cookie, saves the new token and retries this call.
+  Future<void> verifySession() => _dio.get<dynamic>(
+        '/api/auth/me',
+        options: Options(
+          sendTimeout: const Duration(seconds: 6),
+          receiveTimeout: const Duration(seconds: 6),
+        ),
+      );
+
   /// Lets the server revoke the session and clear the cookie. Identified by
   /// the cookie, so it skips the Bearer header and the 401 refresh logic.
   Future<void> logout() => _dio.post<dynamic>(

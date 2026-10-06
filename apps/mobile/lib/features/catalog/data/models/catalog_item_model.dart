@@ -1,47 +1,64 @@
+import '../../../../core/models/color_option.dart';
 import '../../domain/entities/catalog_item.dart';
 import '../../domain/entities/catalog_page.dart';
 
 double? _toDouble(dynamic v) {
   if (v is num) return v.toDouble();
-  if (v is String) return double.tryParse(v); // Prisma Decimal -> string
+  if (v is String) return double.tryParse(v);
   return null;
 }
 
-String? _firstImageUrl(Map<String, dynamic> json) {
-  final direct = json['imageUrl'] ?? json['image'] ?? json['thumbnail'];
-  if (direct is String && direct.isNotEmpty) return direct;
-
-  final images = json['images'];
-  if (images is List && images.isNotEmpty) {
-    final first = images.first;
-    if (first is String) return first;
-    if (first is Map && first['url'] is String) return first['url'] as String;
-  }
-  return null;
-}
-
+/// One product card from `GET /api/products`:
+/// `{ id, name, slug, category:{name}, promoTag, basePrice, salePrice, price,
+///    thumbnail, colors:[{color,colorHex}], sizes:[..], inStock, lowStock }`.
 class CatalogItemModel extends CatalogItem {
   const CatalogItemModel({
     required super.id,
+    required super.slug,
     required super.title,
-    super.description,
-    super.authorName,
-    super.createdAt,
+    super.categoryName,
     super.price,
+    super.basePrice,
+    super.salePrice,
     super.imageUrl,
+    super.promoTag,
+    super.inStock,
+    super.lowStock,
+    super.colors,
+    super.sizes,
   });
 
   factory CatalogItemModel.fromJson(Map<String, dynamic> json) {
-    final author = json['author'];
+    final category = json['category'];
+    final rawColors = json['colors'];
+    final rawSizes = json['sizes'];
+
     return CatalogItemModel(
-      id: json['id'].toString(), // int or uuid
-      title: (json['title'] ?? json['name'])?.toString() ?? '',
-      description: json['description'] as String?,
-      authorName: (json['authorName'] ??
-          (author is Map ? author['username'] : null)) as String?,
-      createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
-      price: _toDouble(json['price'] ?? json['basePrice']),
-      imageUrl: _firstImageUrl(json),
+      id: json['id'].toString(),
+      slug: json['slug']?.toString() ?? '',
+      title: json['name']?.toString() ?? '',
+      categoryName: category is Map ? category['name'] as String? : null,
+      price: _toDouble(json['price']),
+      basePrice: _toDouble(json['basePrice']),
+      salePrice: _toDouble(json['salePrice']),
+      imageUrl: json['thumbnail'] as String?,
+      promoTag: json['promoTag'] as String?,
+      inStock: json['inStock'] as bool? ?? true,
+      lowStock: json['lowStock'] as bool? ?? false,
+      colors: rawColors is List
+          ? rawColors
+              .whereType<Map>()
+              .map(
+                (c) => ColorOption(
+                  name: c['color'].toString(),
+                  hex: c['colorHex'] as String?,
+                ),
+              )
+              .toList(growable: false)
+          : const [],
+      sizes: rawSizes is List
+          ? rawSizes.map((s) => s.toString()).toList(growable: false)
+          : const [],
     );
   }
 }
@@ -53,38 +70,25 @@ class CatalogPageModel extends CatalogPage {
     required super.hasMore,
   });
 
-  /// Accepts `{ data: [...] }`, `{ items: [...] }`, `{ products: [...] }` or
-  /// `{ data: { items: [...] } }`, with optional `pagination` metadata
-  /// (`hasMore` or `totalPages`). Without metadata, a full page implies more.
+  /// Backend shape: `{ items: [...], total, page, pageSize, totalPages }`.
   factory CatalogPageModel.fromResponse(
     dynamic body, {
     required int page,
     required int limit,
   }) {
     final map = body as Map<String, dynamic>;
+    final raw = (map['items'] as List?) ?? const <dynamic>[];
 
-    dynamic raw = map['data'] ?? map['items'] ?? map['products'];
-    if (raw is Map) raw = raw['items'] ?? raw['products'] ?? raw['data'];
-    final list = (raw as List?) ?? const <dynamic>[];
-
-    final items = list
-        .map((e) => CatalogItemModel.fromJson(Map<String, dynamic>.from(e as Map)))
+    final items = raw
+        .map(
+          (e) => CatalogItemModel.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
         .toList(growable: false);
 
-    final meta = map['pagination'] ?? map['meta'];
-    bool? hasMore;
-    if (meta is Map) {
-      if (meta['hasMore'] is bool) {
-        hasMore = meta['hasMore'] as bool;
-      } else if (meta['totalPages'] is int) {
-        hasMore = page < (meta['totalPages'] as int);
-      }
-    }
+    final totalPages = map['totalPages'];
+    final hasMore =
+        totalPages is int ? page < totalPages : items.length >= limit;
 
-    return CatalogPageModel(
-      items: items,
-      page: page,
-      hasMore: hasMore ?? items.length >= limit,
-    );
+    return CatalogPageModel(items: items, page: page, hasMore: hasMore);
   }
 }
