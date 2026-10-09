@@ -3,6 +3,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/theme/app_theme.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
+import '../../../cart/presentation/cart_button.dart';
+import '../../../orders/presentation/orders_page.dart';
 import '../../../product/presentation/pages/product_detail_page.dart';
 import '../../domain/entities/catalog_filters.dart';
 import '../../domain/entities/catalog_item.dart';
@@ -230,6 +232,14 @@ class _Header extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          const CartButton(),
+          IconButton(
+            tooltip: 'My orders',
+            icon: const Icon(Icons.receipt_long_outlined, size: 22),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const OrdersScreen()),
+            ),
+          ),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout, size: 20),

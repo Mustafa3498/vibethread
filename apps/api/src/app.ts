@@ -11,6 +11,10 @@ import { categoriesRouter } from './routes/categories';
 import { healthRouter } from './routes/health';
 import { manageRouter } from './routes/manage';
 import { productsRouter } from './routes/products';
+import { addressesRouter } from './routes/addresses';
+import { cartRouter } from './routes/cart';
+import { checkoutRouter, ordersRouter } from './routes/orders';
+import { staffOrdersRouter } from './routes/staff-orders';
 
 export function createApp() {
   const app = express();
@@ -29,7 +33,11 @@ export function createApp() {
   app.use('/api/categories', categoriesRouter); // public
   app.use('/api/products', productsRouter); // public
   app.use('/api/manage', manageRouter); // SHOPKEEPER + ADMIN
-  // Step 7 → /api/cart, /api/orders
+  app.use('/api/manage/orders', staffOrdersRouter); // SHOPKEEPER + ADMIN
+  app.use('/api/cart', cartRouter);
+  app.use('/api/addresses', addressesRouter);
+  app.use('/api/checkout', checkoutRouter);
+  app.use('/api/orders', ordersRouter);
 
   app.use((_req, res) =>
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }),

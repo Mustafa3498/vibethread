@@ -7,6 +7,9 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/utils/format.dart';
 import '../../../../core/widgets/net_image.dart';
 import '../../../auth/domain/repositories/auth_repository.dart';
+import '../../../../core/utils/toast.dart';
+import '../../../cart/presentation/cart_bloc.dart';
+import '../../../cart/presentation/cart_button.dart';
 import '../../domain/entities/product_detail.dart';
 import '../../domain/repositories/product_repository.dart';
 import '../bloc/product_detail_bloc.dart';
@@ -40,16 +43,21 @@ class _ProductDetailView extends StatelessWidget {
       builder: (context, state) {
         final product = state.product;
 
-        return Scaffold(
+        return BlocListener<CartBloc, CartState>(
+          listenWhen: (prev, curr) => curr.toast != null && curr.toast != prev.toast,
+          listener: (context, cart) => showToast(context, cart.toast!),
+          child: Scaffold(
           appBar: AppBar(
             actions: [
               if (product != null) _LivePill(connected: state.liveConnected),
-              const SizedBox(width: 12),
+              const CartButton(),
+              const SizedBox(width: 4),
             ],
           ),
           body: _buildBody(context, state),
           bottomNavigationBar:
               product == null ? null : _AddToCartBar(state: state),
+          ),
         );
       },
     );
@@ -516,17 +524,7 @@ class _AddToCartBar extends StatelessWidget {
         top: false,
         child: FilledButton(
           onPressed: enabled
-              ? () {
-                  ScaffoldMessenger.of(context)
-                    ..hideCurrentSnackBar()
-                    ..showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Cart arrives in the next update (${v!.color} / ${v.size}).',
-                        ),
-                      ),
-                    );
-                }
+              ? () => context.read<CartBloc>().add(CartItemAdded(v!.id))
               : null,
           child: Text(label),
         ),

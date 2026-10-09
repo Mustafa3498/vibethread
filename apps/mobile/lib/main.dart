@@ -14,7 +14,11 @@ import 'features/auth/data/repositories/auth_repository_impl.dart';
 import 'features/auth/domain/repositories/auth_repository.dart';
 import 'features/auth/presentation/bloc/auth_bloc.dart';
 import 'features/auth/presentation/pages/login_page.dart';
+import 'features/cart/data/cart_repository.dart';
+import 'features/cart/presentation/cart_bloc.dart';
 import 'features/catalog/data/datasources/catalog_remote_datasource.dart';
+import 'features/checkout/data/checkout_repository.dart';
+import 'features/orders/data/order_repository.dart';
 import 'features/catalog/data/repositories/catalog_repository_impl.dart';
 import 'features/catalog/domain/repositories/catalog_repository.dart';
 import 'features/catalog/presentation/bloc/catalog_bloc.dart';
@@ -84,6 +88,9 @@ class AppDependencies {
     required this.authRepository,
     required this.catalogRepository,
     required this.productRepository,
+    required this.cartRepository,
+    required this.checkoutRepository,
+    required this.orderRepository,
     required this.sessionExpired,
   });
 
@@ -92,6 +99,9 @@ class AppDependencies {
   final AuthRepository authRepository;
   final CatalogRepository catalogRepository;
   final ProductRepository productRepository;
+  final CartRepository cartRepository;
+  final CheckoutRepository checkoutRepository;
+  final OrderRepository orderRepository;
 
   /// Emits when the refresh token was rejected and the user must sign in again.
   final Stream<void> sessionExpired;
@@ -121,6 +131,10 @@ class AppDependencies {
       ProductRemoteDataSource(dioClient.dio),
     );
 
+    final cartRepository = CartRepository(dioClient.dio);
+    final checkoutRepository = CheckoutRepository(dioClient.dio);
+    final orderRepository = OrderRepository(dioClient.dio);
+
     final socketService = SocketService(
       secureStorage: secureStorage,
       serverUrl: _socketUrl,
@@ -132,6 +146,9 @@ class AppDependencies {
       authRepository: authRepository,
       catalogRepository: catalogRepository,
       productRepository: productRepository,
+      cartRepository: cartRepository,
+      checkoutRepository: checkoutRepository,
+      orderRepository: orderRepository,
       sessionExpired: sessionExpired.stream,
     );
   }
@@ -160,6 +177,11 @@ class VibeThreadApp extends StatelessWidget {
         RepositoryProvider<ProductRepository>.value(
           value: deps.productRepository,
         ),
+        RepositoryProvider<CartRepository>.value(value: deps.cartRepository),
+        RepositoryProvider<CheckoutRepository>.value(
+          value: deps.checkoutRepository,
+        ),
+        RepositoryProvider<OrderRepository>.value(value: deps.orderRepository),
         // Lives for the whole app lifetime, so no explicit dispose is needed.
         RepositoryProvider<SocketService>.value(value: deps.socketService),
       ],
@@ -171,6 +193,12 @@ class VibeThreadApp extends StatelessWidget {
           ),
           BlocProvider<CatalogBloc>(
             create: (_) => CatalogBloc(deps.catalogRepository),
+          ),
+          BlocProvider<CartBloc>(
+            create: (_) => CartBloc(
+              repository: deps.cartRepository,
+              socket: deps.socketService,
+            ),
           ),
         ],
         child: MaterialApp(
@@ -222,8 +250,10 @@ class _AuthGateState extends State<_AuthGate> {
       listener: (context, state) {
         if (state is AuthAuthenticated) {
           unawaited(socket.reconnect()); // fresh token after login/refresh
+          context.read<CartBloc>().add(const CartStarted());
         } else if (state is AuthUnauthenticated) {
           socket.disconnect();
+          context.read<CartBloc>().add(const CartReset());
         }
       },
       builder: (context, state) {
