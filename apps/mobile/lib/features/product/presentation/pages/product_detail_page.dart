@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../core/models/color_option.dart';
 import '../../../../core/services/socket_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/tracking/tracking_service.dart';
 import '../../../../core/utils/format.dart';
 import '../../../../core/widgets/net_image.dart';
 import '../../../auth/domain/repositories/auth_repository.dart';
@@ -43,7 +44,11 @@ class _ProductDetailView extends StatelessWidget {
       builder: (context, state) {
         final product = state.product;
 
-        return BlocListener<CartBloc, CartState>(
+        return _ViewTracker(
+          product: product,
+          selectedColor: state.selectedColor,
+          selectedSize: state.selectedSize,
+          child: BlocListener<CartBloc, CartState>(
           listenWhen: (prev, curr) => curr.toast != null && curr.toast != prev.toast,
           listener: (context, cart) => showToast(context, cart.toast!),
           child: Scaffold(
@@ -57,6 +62,7 @@ class _ProductDetailView extends StatelessWidget {
           body: _buildBody(context, state),
           bottomNavigationBar:
               product == null ? null : _AddToCartBar(state: state),
+          ),
           ),
         );
       },
@@ -524,7 +530,15 @@ class _AddToCartBar extends StatelessWidget {
         top: false,
         child: FilledButton(
           onPressed: enabled
-              ? () => context.read<CartBloc>().add(CartItemAdded(v!.id))
+              ? () {
+                  context.read<TrackingService>().track(
+                        TrackType.addToCart,
+                        productId: state.product?.id,
+                        variantId: v!.id,
+                        page: 'product',
+                      );
+                  context.read<CartBloc>().add(CartItemAdded(v.id));
+                }
               : null,
           child: Text(label),
         ),
@@ -675,4 +689,104 @@ class _ZoomViewerState extends State<_ZoomViewer> {
       ),
     );
   }
+}
+
+
+// -----------------------------------------------------------------------------
+// Behavior tracking for the product page
+// -----------------------------------------------------------------------------
+
+/// Records how the shopper behaves on one product page:
+///  * PRODUCT_VIEW with the time spent on the page (sent when leaving),
+///  * COLOR_SELECT / SIZE_SELECT whenever a choice changes,
+///  * SIZE_TOGGLE (hesitation signal) when the size was changed 3+ times.
+/// It renders nothing itself.
+class _ViewTracker extends StatefulWidget {
+  const _ViewTracker({
+    required this.product,
+    required this.selectedColor,
+    required this.selectedSize,
+    required this.child,
+  });
+
+  final ProductDetail? product;
+  final String? selectedColor;
+  final String? selectedSize;
+  final Widget child;
+
+  @override
+  State<_ViewTracker> createState() => _ViewTrackerState();
+}
+
+class _ViewTrackerState extends State<_ViewTracker> {
+  late final TrackingService _tracking = context.read<TrackingService>();
+  final Stopwatch _watch = Stopwatch();
+  String? _productId;
+  String? _lastColor;
+  String? _lastSize;
+  int _sizeChanges = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _attach();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ViewTracker old) {
+    super.didUpdateWidget(old);
+    _attach();
+
+    final pid = _productId;
+    if (pid == null) return;
+    if (widget.selectedColor != _lastColor) {
+      if (_lastColor != null && widget.selectedColor != null) {
+        _tracking.track(TrackType.colorSelect,
+            productId: pid, color: widget.selectedColor, page: 'product');
+      }
+      _lastColor = widget.selectedColor;
+    }
+    if (widget.selectedSize != _lastSize) {
+      if (widget.selectedSize != null) {
+        // switching colour resets the size to null, that is not a user toggle
+        _sizeChanges++;
+        _tracking.track(TrackType.sizeSelect,
+            productId: pid,
+            color: widget.selectedColor,
+            size: widget.selectedSize,
+            page: 'product');
+      }
+      _lastSize = widget.selectedSize;
+    }
+  }
+
+  /// Starts the clock once the product has actually loaded.
+  void _attach() {
+    final p = widget.product;
+    if (p == null || _productId != null) return;
+    _productId = p.id;
+    _lastColor = widget.selectedColor;
+    _lastSize = widget.selectedSize;
+    _watch.start();
+    _tracking.setPage('product');
+  }
+
+  @override
+  void dispose() {
+    final pid = _productId;
+    if (pid != null) {
+      _watch.stop();
+      if (_sizeChanges >= 3) {
+        _tracking.track(TrackType.sizeToggle,
+            productId: pid, page: 'product', meta: {'toggles': _sizeChanges});
+      }
+      _tracking.track(TrackType.productView,
+          productId: pid, durationMs: _watch.elapsedMilliseconds, page: 'product');
+    }
+    _tracking.setPage('catalog');
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

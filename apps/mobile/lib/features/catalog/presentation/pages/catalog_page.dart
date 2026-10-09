@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/tracking/tracking_service.dart';
 import '../../../auth/presentation/bloc/auth_bloc.dart';
 import '../../../cart/presentation/cart_button.dart';
 import '../../../orders/presentation/orders_page.dart';
@@ -30,6 +31,7 @@ class _CatalogScreenState extends State<CatalogScreen> {
     super.initState();
     _scroll.addListener(_onScroll);
     context.read<CatalogBloc>().add(const CatalogStarted());
+    context.read<TrackingService>().setPage('catalog');
   }
 
   @override
@@ -90,9 +92,10 @@ class _CatalogScreenState extends State<CatalogScreen> {
                       child: TextField(
                         controller: _search,
                         textInputAction: TextInputAction.search,
-                        onChanged: (q) => context
-                            .read<CatalogBloc>()
-                            .add(CatalogSearchChanged(q)),
+                        onChanged: (q) {
+                          context.read<TrackingService>().trackSearch(q);
+                          context.read<CatalogBloc>().add(CatalogSearchChanged(q));
+                        },
                         decoration: const InputDecoration(
                           hintText: 'Search the collection',
                           prefixIcon: Icon(Icons.search),
@@ -103,9 +106,17 @@ class _CatalogScreenState extends State<CatalogScreen> {
                   SliverToBoxAdapter(
                     child: _FilterBar(
                       filters: state.filters,
-                      onChanged: (f) => context
-                          .read<CatalogBloc>()
-                          .add(CatalogFiltersChanged(f)),
+                      onChanged: (f) {
+                        context.read<TrackingService>().track(
+                          TrackType.filterApply,
+                          page: 'catalog',
+                          meta: {
+                            'sort': f.sort.apiValue,
+                            'inStockOnly': f.inStockOnly,
+                          },
+                        );
+                        context.read<CatalogBloc>().add(CatalogFiltersChanged(f));
+                      },
                     ),
                   ),
                   ..._buildBody(context, state),

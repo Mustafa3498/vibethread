@@ -15,6 +15,8 @@ import { addressesRouter } from './routes/addresses';
 import { cartRouter } from './routes/cart';
 import { checkoutRouter, ordersRouter } from './routes/orders';
 import { staffOrdersRouter } from './routes/staff-orders';
+import { analyticsRouter, trackRouter } from './routes/track';
+import { startAnalyticsRollup } from './services/analytics.service';
 
 export function createApp() {
   const app = express();
@@ -38,6 +40,9 @@ export function createApp() {
   app.use('/api/addresses', addressesRouter);
   app.use('/api/checkout', checkoutRouter);
   app.use('/api/orders', ordersRouter);
+  app.use('/api/track', trackRouter);
+  app.use('/api/manage/analytics', analyticsRouter); // SHOPKEEPER + ADMIN
+  startAnalyticsRollup();
 
   app.use((_req, res) =>
     res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }),

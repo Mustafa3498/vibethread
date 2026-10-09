@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/tracking/tracking_service.dart';
 import '../../../core/utils/format.dart';
 import '../../../core/utils/toast.dart';
 import '../../cart/data/cart_repository.dart';
@@ -36,6 +37,18 @@ class _CheckoutView extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiBlocListener(
       listeners: [
+        // CHECKOUT_START: once per visit, when the priced cart + hold arrive
+        BlocListener<CheckoutBloc, CheckoutState>(
+          listenWhen: (prev, curr) =>
+              prev.cart == null && curr.cart != null && curr.status != CheckoutStatus.failure,
+          listener: (context, state) {
+            final t = context.read<TrackingService>()..setPage('checkout');
+            for (final l in state.cart!.items) {
+              t.track(TrackType.checkoutStart,
+                  variantId: l.variantId, page: 'checkout', meta: {'qty': l.quantity});
+            }
+          },
+        ),
         BlocListener<CheckoutBloc, CheckoutState>(
           listenWhen: (prev, curr) => curr.toast != null && curr.toast != prev.toast,
           listener: (context, state) => showToast(context, state.toast!),
@@ -46,6 +59,12 @@ class _CheckoutView extends StatelessWidget {
           listener: (context, state) {
             final order = state.order;
             if (order == null) return;
+            final t = context.read<TrackingService>();
+            for (final l in state.cart?.items ?? const []) {
+              t.track(TrackType.checkoutComplete,
+                  variantId: l.variantId, page: 'checkout', meta: {'qty': l.quantity});
+            }
+            unawaited(t.flush());
             // Back stack becomes: catalog -> order confirmation.
             Navigator.of(context).pushAndRemoveUntil(
               MaterialPageRoute<void>(builder: (_) => OrderPlacedScreen(order: order)),

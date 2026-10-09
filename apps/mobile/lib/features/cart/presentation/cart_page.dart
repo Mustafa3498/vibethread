@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/tracking/tracking_service.dart';
 import '../../../core/utils/format.dart';
 import '../../../core/utils/toast.dart';
 import '../../../core/widgets/net_image.dart';
@@ -163,7 +164,13 @@ class _CartLineTile extends StatelessWidget {
           tooltip: 'Remove',
           visualDensity: VisualDensity.compact,
           icon: const Icon(Icons.close, size: 20, color: AppColors.textMuted),
-          onPressed: busy ? null : () => bloc.add(CartItemRemoved(line.variantId)),
+          onPressed: busy
+              ? null
+              : () {
+                  context.read<TrackingService>().track(TrackType.removeFromCart,
+                      variantId: line.variantId, page: 'cart');
+                  bloc.add(CartItemRemoved(line.variantId));
+                },
         ),
       ],
     );

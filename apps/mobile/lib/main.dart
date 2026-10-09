@@ -9,6 +9,7 @@ import 'core/network/dio_client.dart';
 import 'core/services/secure_storage_service.dart';
 import 'core/services/socket_service.dart';
 import 'core/theme/app_theme.dart';
+import 'core/tracking/tracking_service.dart';
 import 'features/auth/data/datasources/auth_remote_datasource.dart';
 import 'features/auth/data/repositories/auth_repository_impl.dart';
 import 'features/auth/domain/repositories/auth_repository.dart';
@@ -91,6 +92,7 @@ class AppDependencies {
     required this.cartRepository,
     required this.checkoutRepository,
     required this.orderRepository,
+    required this.trackingService,
     required this.sessionExpired,
   });
 
@@ -102,6 +104,7 @@ class AppDependencies {
   final CartRepository cartRepository;
   final CheckoutRepository checkoutRepository;
   final OrderRepository orderRepository;
+  final TrackingService trackingService;
 
   /// Emits when the refresh token was rejected and the user must sign in again.
   final Stream<void> sessionExpired;
@@ -134,6 +137,8 @@ class AppDependencies {
     final cartRepository = CartRepository(dioClient.dio);
     final checkoutRepository = CheckoutRepository(dioClient.dio);
     final orderRepository = OrderRepository(dioClient.dio);
+    final trackingService = TrackingService(dio: dioClient.dio);
+    await trackingService.start();
 
     final socketService = SocketService(
       secureStorage: secureStorage,
@@ -149,6 +154,7 @@ class AppDependencies {
       cartRepository: cartRepository,
       checkoutRepository: checkoutRepository,
       orderRepository: orderRepository,
+      trackingService: trackingService,
       sessionExpired: sessionExpired.stream,
     );
   }
@@ -182,6 +188,7 @@ class VibeThreadApp extends StatelessWidget {
           value: deps.checkoutRepository,
         ),
         RepositoryProvider<OrderRepository>.value(value: deps.orderRepository),
+        RepositoryProvider<TrackingService>.value(value: deps.trackingService),
         // Lives for the whole app lifetime, so no explicit dispose is needed.
         RepositoryProvider<SocketService>.value(value: deps.socketService),
       ],
@@ -253,6 +260,7 @@ class _AuthGateState extends State<_AuthGate> {
           context.read<CartBloc>().add(const CartStarted());
         } else if (state is AuthUnauthenticated) {
           socket.disconnect();
+          unawaited(context.read<TrackingService>().endSessionAndRotate());
           context.read<CartBloc>().add(const CartReset());
         }
       },
